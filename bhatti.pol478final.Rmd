@@ -1,0 +1,435 @@
+---
+title: "Corporate Lobbying in the U.S"
+author: "Daanish Bhatti"
+date: '2022-12-12'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      message = FALSE, 
+                      warning = FALSE, 
+                      fig.width = 7, 
+                      fig.height = 4, 
+                      fig.align = 'center') 
+
+library(tidyverse)
+library(gt)
+library(ggplot2)
+library(scales)
+library(igraph)
+library(sna)
+library(data.table)
+library(plotly)
+
+setwd("/Users/akrambhatti/desktop/pol478/lobby")
+network <- read.csv("legislator_network.csv")
+bills <- read.csv("bills.csv")
+issues <- read.csv("issue_level.csv")
+reports <- read.csv("dataset___report_level.csv", header = TRUE)
+clients <- read.csv("dataset___client_level.csv", header = TRUE)
+text <- read.csv("text.csv", header = TRUE)
+
+reports$amount = as.numeric(gsub("[\\$,]", "", reports$amount))
+```
+
+A quantitative analysis of corporate lobbying measures the extent to which corporations use the money to garner influence from the political realm. Through lobbying reports, I created visualizations measuring the direct lobbying efforts of government-relations firms, professional organizations, and other relevant companies on the U.S. legislative bodies. This document provides insights into general lobbying patterns over time, areas of interest for most interest groups, and distinct patterns and interests for two major U.S. companies - Apple and Microsoft. 
+
+This data is from LobbyView. Primarily, I'm visualizing report-level data from quarterly filings between 1999 to 2020 Quarter 2. These quarterly reports require that paid lobbyists file reports on their lobbying activity. My analysis stems from three different datasets from the LobbyView database that could be merged. Specifically, I focused on the reports, clients, and issues regarding corporate lobbying activity. The key variable of interest was lobbying expenditure. 
+
+I was interested in approaching the data from two particular angles. One is to answer general questions about corporate lobbying activity to get an overview of the landscape. I asked myself simple questions and formed them into visualizations. The second approach I took is more in-depth industry analysis. I focused on two specific companies - Microsoft and Apple - and created visualizations that convey two things. One is the top three issues each firm cares about from 1999 to 2020. Two, each company preferred a mechanism for lobbying, whether through their efforts or an outside organization on K-Street.
+
+#### How many reports are filed each year? 
+```{r}
+count_year <- reports %>% 
+  group_by(report_year) %>% 
+  summarise(N=n())
+
+count <- ggplot(count_year, aes(x = report_year, y = N )) + 
+  labs(title = "Lobbying Reports Over Time", subtitle = "From 1999 to 2020 Q2", x = "Year", y = "No. of Reports") + theme_classic() + geom_line(size = 1.5, color = "lightgrey") + geom_point(size = 2, shape = 5, color = "steelblue")
+
+count
+```
+This figure provides an overview on the amount of lobbying reports filed between 1999 to 2020 Quarter 2. From 2008 - 2009, lobbying reporting increased from 48,078 reports in 2007 to 81,075 in 2008. 
+
+#### How much is lobbied per year? 
+```{r pressure, echo=FALSE}
+yr <- subset(reports, select = c(report_year, report_quarter_code, amount, registrant_name))
+
+yr_total <- yr %>% 
+  na.omit() %>% #why does my plot change when I move na.omit()?
+  group_by(report_year) %>% 
+  summarize(total_per_year = sum(amount)) 
+
+am_time <- ggplot(yr_total, aes(x = report_year, y=total_per_year)) + geom_bar(stat = "identity", fill ="lightblue") +
+  scale_y_continuous(labels = scales::dollar_format(unit = "B", prefix = "$", suffix = " B", scale = 1e-9)) + 
+  theme_classic() 
+
+p <- am_time + labs(title = "Lobbying Expenditure Over Time", 
+                    subtitle = "1999 - 2020 Q2", 
+       caption = "2020 figures only go up to Q2", 
+       x = "Year", 
+       y = "$")
+
+p
+```
+
+The figure shows us that lobbying expenditure increased steadily from 2000 to 2010. Then, remained at steady levels from 2010 - 2019. Data from 2020 only goes up to Q2, but we can expect the amounts to be level with amounts from 2010 to 2019.
+
+#### Distribution of Lobbying Activity
+```{r}
+name <- subset(reports, select = c(registrant_name, report_year, amount)) 
+
+firm_amount_year <- name %>% 
+  group_by(report_year, registrant_name) %>% 
+  summarise(firm_amt = sum(amount, na.rm = TRUE)) %>% 
+  mutate(freq = firm_amt / sum(firm_amt)) %>% 
+  na.omit()
+
+dist_amount <- ggplot(firm_amount_year, aes(firm_amt))
+
+dist_amount + geom_histogram(color = "black", fill = "orange") + scale_x_log10(breaks = 10^(2:8), labels = trans_format("log10", math_format(10^.x))) + facet_wrap(~report_year) + 
+  labs(title = "Amount Lobbied by Registrant", subtitle = "From 1999 - 2020 Q2", x = "$", y = "Count") + theme_classic()
+```
+This figure shows the distribution of lobbying reports by the amount listed on the report. Each year follows a relatively normal distribution. That is, there are no clear outliers in each particular year. Registrants do not tend to over or underspend relative to a particular issue. Therefore, although prior figures illustrate that firm lobbying activity is increasing through both reports filed and expenditure, the year-to-year behavior appears to be the same. 
+
+#### Who's spent the most? 
+```{r firm_amounts}
+name <- subset(reports, select = c(registrant_name, report_year, amount)) 
+
+firm_amount <- name %>% 
+  group_by(registrant_name) %>% 
+  summarise(firm_amt = sum(amount, na.rm = TRUE)) %>% 
+  mutate(freq = firm_amt / sum(firm_amt)) 
+
+firm_top10 <- firm_amount[order(-firm_amount$firm_amt), ][1:10,]
+
+firm_top10 <- firm_top10 %>% 
+  mutate(new_name = recode(registrant_name, "CASSIDY & ASSOCIATES, INC. (FORMERLY KNOWN AS CASSIDY & ASSOCIATES)" = "CASSIDY & ASSOCIATES, INC."))
+
+firm_amt_p <- ggplot(firm_top10, aes(x = reorder(new_name, firm_amt), y = firm_amt)) + scale_y_continuous(labels = scales::dollar_format(unit = "B", prefix = "$", suffix = " B", scale = 1e-9)) +   
+  geom_bar(stat = "identity", width = 0.75, fill = "lightblue") + 
+  coord_flip() + 
+  labs(title = "Top 10 Firms by Amount", x = "Registrant", y = "$", 
+       subtitle = "From 1999 - 2020 Q2") + 
+  theme_classic()
+
+dotplot <- ggplot(firm_top10, aes(x = firm_amt, y = reorder(new_name,firm_amt) )) + geom_point(color = "blue", size = 2) +
+geom_segment(aes(x = 370,000, 
+                 xend = firm_amt, 
+                 y = reorder(new_name, firm_amt), 
+                 yend = reorder(new_name, firm_amt)), 
+             color = "lightgrey") + theme_minimal() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) + 
+  scale_x_continuous(labels = scales::dollar_format(unit = "B", prefix = "$", suffix = " B", scale = 1e-9))
+
+dotplot + labs(title = "Top 10 Firms by Amount", x = "Registrant", y = "$", 
+       subtitle = "From 1999 - 2020 Q2")
+
+```
+We see that the highest spenders are a mix of government-relations (lobbying) firms, commercial organizations, and other companies. Akin Gump, Cassidy & Associates, and more all government relations firms. The American Medical Association is a professional organization, Over the 20 years, the United States Chamber of Commerce, a business organization, has spent the most money at approximately 1.15 billion dollars. The Chamber of Commerce has a sizable impact on the overall amount of lobbying. However, how does their lobbying expenditure vary by year? 
+
+```{r}
+firm_amount_year <- name %>% 
+  group_by(report_year, registrant_name) %>% 
+  summarise(firm_amt = sum(amount, na.rm = TRUE)) %>% 
+  mutate(freq = firm_amt / sum(firm_amt)) %>% 
+  na.omit()
+
+firm_amount_year$ccus <- firm_amount_year$registrant_name == c("CHAMBER OF COMMERCE OF THE U.S.A.", "MR. | JOHNNY | SATTERWHITE")
+
+commerce2 <- firm_amount_year %>% 
+  group_by(report_year, ccus)
+
+commerce_p <- ggplot(commerce2, aes(x = report_year, y = firm_amt, fill = ccus)) + geom_bar(stat = "identity") + scale_y_continuous(labels = scales::dollar_format(unit = "B", prefix = "$", suffix = " B", scale = 1e-9)) + theme_classic() + 
+  labs(title = "Chamber of Commerce Has a Marginal Effect by Year", x = "Year", y = "Amount", subtitle = "From 1999 to 2020 Q2")
+
+commerce_p + scale_fill_discrete(name = "Firms", labels = c("Other", "Chamber of Commmerce"))
+```
+The figure shows the U.S. Chamber of Commerce's spending every year in comparison to other registrants that filed lobbying reports. Even though the Chamber of Commerce has spent the most money to date on lobbying, their spending compared to other firms is only relevant for one period - 2010. So, what makes 2010 so special? 
+
+```{r ccus_issues}
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+rep_issues <- left_join(reports, issues, by = "report_uuid")
+
+ten_commerce <- rep_issues %>% 
+  filter(registrant_name == c("CHAMBER OF COMMERCE OF THE U.S.A.", "MR. | JOHNNY | SATTERWHITE") & report_year == 2010) %>% 
+  filter(report_year == 2010) %>% 
+  group_by(issue_code) %>% 
+  summarise(commerce_amt = sum(amount)) %>% 
+  na.omit()
+
+c_issues <- ten_commerce[order(-ten_commerce$commerce_amt), ][1:8, ] 
+
+c_issues <- c_issues %>% mutate(code_full = recode(issue_code, SCI = "Science", PHA = "Pharmacy", BAN = "Banking", CHM = "Chemicals / Chemical Industry", TEC = "Telecommunications", TRA = "Trade", DEF = "Defense", CIV = "Civil Rights" ))
+
+c_i_p <- ggplot(c_issues, aes(y = commerce_amt, x = reorder(code_full, commerce_amt), fill = code_full)) + 
+  geom_bar(stat = "identity", width = 0.7) + 
+  scale_y_continuous(labels = scales::dollar_format(unit = "M", prefix = "$", suffix = " M", scale = 1e-6)) + theme_classic() + 
+  labs(title = "Chamber of Commerce Issue Breakdown", subtitle = "Top 8 Issues by Expenditure in 2010", 
+       y = "$", x = "Issues") +  coord_flip()
+
+c_i_p + scale_fill_discrete(name = "Issues") + scale_color_brewer(cbPalette) + theme(legend.position = "none")
+```
+The Chamber of Commerce spent the most money (+150 million) on lobbying for Science and Technology Issues in 2010. Trade, Telecommunications, Pharmacy, and Telecommunications were all even at 100 million. Interestingly, more traditional issues I would associate with business endeavors aren't on the list like Taxes or Fiscal Budget Operations. I think it's plausible that a high expenditure on Science & Technology would be unusual for the Chamber of Commerce, which might contribute to the peak in lobbying over time.
+
+#### Who has the most clients? 
+```{r}
+r_c <- left_join(reports, clients, by = c("client_uuid" = "client_uuid"))
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+c_f <- r_c %>% 
+  subset(select = c("report_year", "registrant_name", "amount", "client_name")) %>% 
+  filter(amount > 0) %>% 
+  group_by(registrant_name) %>% 
+  summarise(N= n()) %>% 
+  mutate(freq = N / sum(N),
+           pct = round((freq*100), 0))  %>% 
+  arrange(-N)
+
+c_f <- c_f %>% 
+  mutate(new_name = recode(registrant_name, "CASSIDY & ASSOCIATES, INC. (FORMERLY KNOWN AS CASSIDY & ASSOCIATES)" = "CASSIDY & ASSOCIATES, INC."
+                           )) 
+
+c_f_p <- ggplot(c_f[1:10, ], aes(x = N, y = reorder(new_name, N)))
+
+c_f_p + geom_point(color = "black", size = 2) + geom_segment(aes(x = 5882, 
+                 xend = N, 
+                 y = reorder(new_name, N), 
+                 yend = reorder(new_name, N)), 
+             color = "lightgrey") + theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) + 
+  labs(title = "Registrants with Highest Client No.", subtitle = "Top 10", 
+       x = "Count of Clients", y = "Firm Name")
+```
+Companies hire firms and individuals to do lobbying on their behalf. In lobbying reports, these firms must specify their "client" i.e. the entity they're lobbying for. In this figure, we see firms with the highest number of clients. Some firms have a high client number and spend a lot of money. For example, Van Socoyoc Associates lobby for the highest number of clients and have spent approximately 0.60 billion dollars in the period of analysis (1999 - 2020 Q2). 
+
+#### Do firms with more clients spend more? 
+```{r}
+corel <- left_join(c_f, firm_amount, by = "registrant_name")
+
+corel <- corel %>% subset(select = c("registrant_name", "firm_amt", "N")) %>% group_by(registrant_name)
+
+model <- lm(formula = firm_amt ~ N, data = corel)
+
+more <- ggplot(corel, aes(x = N, y = firm_amt)) + 
+  geom_point(color = "black", alpha = 1) + 
+  geom_smooth(method = "loess", formula = 'y~x', se = FALSE) + theme_classic() + 
+  scale_y_continuous(labels = scales::dollar_format(unit = "B", prefix = "$", suffix = " B", scale = 1e-9)) + 
+  labs(title = "Scatterplot", subtitle = "No. of Clients vs Expenditure", x = "No. of Clients", y = "$" )
+
+more
+
+```
+I was curious whether a registrant's client amount determines its lobbying expenditure. According to the loess line, this seems to only be particularly relevant when firms cross a certain amount of clients. For example, at 5000 clients, the slope of the line gets increasingly higher. This relationship is ultimately affected by registrants like the United States Chamber of Commerce, who spend a lot of money, but ultimately lobby for themselves as an overall representative for more than 3 million businesses and organizations. 
+
+
+
+#### What are the top lobbying issues by expenditure?  
+```{r}
+is_rep <- rep_issues %>% 
+  filter(report_year >= 2008 & report_year <= 2019) %>% 
+  group_by(report_year, issue_code) %>% 
+  summarise(issue_amt = sum(amount)) 
+
+is_rep$report_year <- as.character(is_rep$report_year)
+is_rep$report_year <- as.Date(is_rep$report_year, format = "%Y")
+
+is <- is_rep %>% 
+  filter(issue_code %in% c("HCR", "TAX", "BUD")) %>% 
+  arrange(issue_amt) %>% 
+  group_by(issue_code) %>%
+  mutate(code_full = recode(issue_code, BUD = "Budget/Operations", HCR = "Healthcare", TAX = "Tax", TRD = "Trade"))
+
+is_p <- ggplot(is, aes(x = code_full, y = issue_amt, fill = code_full, group= code_full)) + scale_y_continuous(labels = scales::dollar_format(unit = "B", prefix = "$", suffix = " B", scale = 1e-9)) + theme_classic()
+
+is_p + geom_boxplot() +   
+  labs(title = "Top 3 Lobbying Issues by Expenditure",
+       subtitle = "From 2008 - 2019", 
+       y = "$", 
+       x = "Issues") + 
+  scale_fill_discrete(labels = c("Budget / Operations", "Healthcare", "Taxes")) 
+```
+A boxplot provides summary statistics for the top 3 most important lobbying issues by expenditure. From the figure, we see that Tax operates in a world of it's own. Lobbying for taxes between 2008 - 2019 occurs in range between 1.75 billion to 2.25 billion. Budget / Operations is second with a range between 1.25 billion to 1.35 billion. Finally, Healthcare is third with a range below 1.25 billion to just below 1.5 billion. 
+
+
+### Industry Analysis 
+
+Another benefit of the lobbyview dataset is to take an in-depth dive into companies and their lobbying efforts. For comparison, I'm going to look at the lobbying expenditure of two direct competitors - Apple and Microsoft - and try to understand their differences and similarities. 
+
+#### Microsoft 
+```{r}
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+is_c_r <- left_join(r_c, issues, by = "report_uuid") #r_c combines reports and clients 
+
+
+microsoft <- is_c_r %>% 
+  filter(client_name == "Microsoft Corporation" & amount > 0 ) %>% 
+  mutate(code_full = recode(issue_code, BUD = "Budget/Operations", HCR = "Healthcare", TAX = "Tax", TRD = "Trade", CPI = "Computer Industry", CPT = "Copyright/Patent/Trademark", IMM = "Immigration", TEC = "Technology"))
+
+m_issue <- microsoft %>% 
+  group_by(report_year, issue_code) %>% 
+  summarise(is_amt = sum(amount)) %>% 
+  arrange(report_year,-is_amt) %>% 
+  slice(1:3)
+
+m_issue$report_year <- as.Date.character(m_issue$report_year, format = "%Y")
+
+m_plot <- ggplot(m_issue[31:60,], aes(y = is_amt, x = report_year, fill = issue_code)) + 
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_color_brewer(cbPalette) + 
+  scale_x_date(breaks =m_issue$report_year, labels = date_format("%Y")) +
+  theme_classic() + 
+  labs(title = "Microsoft Lobbying Expenditure", subtitle = "2009 - 2018", x = "Yr", y = "$") + 
+  scale_y_continuous(labels = scales::dollar_format(unit = "M", prefix = "$", suffix = " M", scale = 1e-7))  
+
+m_plot + scale_fill_discrete(name = "Issues", labels = c("Computer Industry", "Copyright/Patent/Trademark", "Immigration", "Taxes", "Technology"))
+```
+Consistently, Microsoft spends money to lobby for tax-related issues. I was surprised to see Immigration as a steady issue that Microsoft has lobbied for in all years between 2009 to 2018.  Immigration issues are also associated with the highest peak in lobbying expenditure in the period of analysis. Immigration could be connected to Microsoft's desire to bring in skilled workers from other countries.  
+
+#### Apple 
+```{r}
+
+is_c_r <- left_join(r_c, issues, by = "report_uuid") #r_c combines reports and clients 
+
+apple <- is_c_r %>% 
+  filter(client_name == "Apple" & amount > 0 )
+
+a_issue <- apple %>% 
+  group_by(report_year, issue_code) %>% 
+  summarise(is_amt = sum(amount)) %>% 
+  arrange(report_year,-is_amt) %>% 
+  slice(1:3)
+
+a_issue$report_year <- as.Date.character(m_issue$report_year, format = "%Y")
+
+a_issue_p <- ggplot(a_issue[31:60,], aes(y = is_amt, x = report_year, fill = issue_code)) + geom_bar(stat = "identity", position = "dodge") + scale_color_brewer(cbPalette) + scale_x_date(breaks = m_issue$report_year, labels = date_format("%Y")) + theme_classic() + labs(title = "Apple's Lobbying Expenditure", subtitle = "2009 - 2018", x = "Year", y = "$") + scale_y_continuous(labels = scales::dollar_format(unit = "M", prefix = "$", suffix = " M", scale = 1e-7))
+
+a_issue_p + scale_fill_discrete(name = "Issues", labels = c("Computer Industry", "Education", "Enviornment", "Healthcare", "Taxes", "Technology", "Trade"))
+```
+Like most companies, Apple spent the most amount of it's lobbying efforts on tax lobbying. Interestingly, Apple's second highest lobbying issue was Health Issues in 2016 and 2017. Perhaps, Apple was using it's lobbying efforts to allow devices like the Iphone and Apple Watch to monitor people's health data. 
+
+#### Do Apple or Microsoft Dominate a Particular Issue? 
+```{r}
+apl_m <- is_c_r %>% 
+  filter(client_name %in% c("Microsoft Corporation", "Apple")) %>% 
+  group_by(issue_code, client_name) %>% 
+  summarise(is_amt = sum(amount)) %>% 
+  na.omit() %>% 
+  arrange(-is_amt)
+
+apl_i <- apl_m %>%  mutate(code_full = recode(issue_code, ENV = "Environment", CSP = "Consumer Issues" , LAW = "Law", BUD = "Budget/Operations", HCR = "Health", BAN = "Banking", TAX = "Taxes", TRD = "Trade", CPI = "Computer Industry", CPT = "Copyright/Patent/Trademark", IMM = "Immigration", TEC = "Technology", TRA = "Transportation", FIN = "Financial Institutions", MIA = "Media", TAR = "Tariff Bills", INT = "Intelligence"))
+
+
+is_tech <- ggplot(apl_i[1:10,], aes(x = reorder(code_full, is_amt), fill = client_name, y = is_amt)) + 
+  theme_classic() + 
+  geom_bar(stat = "identity") + 
+  labs(title = "Top 10 Lobbying Issues by Apple and Microsoft", y = "Amount", x = "Lobbying Issues") +
+  scale_y_continuous(labels = scales::dollar_format(unit = "M", prefix = "$", suffix = " M", scale = 1e-7)) + coord_flip()
+
+is_tech + labs()
+```
+This figure charts the top 10 issues where tech giants spent the most money on lobbying expenditure in the period between 1999 - 2020 Q2. Interestingly, Microsoft has spent the most amount of money lobbying for for the enviornment. Meanwhile, Apple spends the most of any tech giant in areas like Law, Banking, and Healthcare. 
+
+This chart not only allows us to see where tech giants spend their money relative to a particular issue, but also which company dominates that particular issue with their spending.
+
+#### In-House vs K-Street Lobbying
+The figures below take the average of Apple and Microsoft's lobbying expenditure over the reporting period. The grey demonstrates instances where the company was it's own registrant, thereby illustrating that the company's lobbying efforts were in-house. The red bar demonstrates instances in which the company (client) was not it's own registrant, thereby illustrating that the company hired an external firm to conduct their lobbying efforts.
+
+#### Apple 
+```{r}
+# apple 
+apple <- is_c_r %>% 
+  filter(client_name == "Apple" & amount > 0 )
+
+appl <- apple %>% subset(select = c("report_year", "registrant_name", "client_name", "amount", "is_client_self_filer")) 
+
+apple_e <- appl %>% group_by(report_year, registrant_name, client_name) %>% summarise(avg = mean(amount))
+
+apple_e$appl <- apple_e$registrant_name == "APPLE INC."
+  
+appl_e_p <- ggplot(apple_e, aes(x = report_year, y = avg, fill = appl )) + theme_classic() + scale_color_brewer(cbPalette) + geom_bar(position = "dodge", stat = "identity") + labs(title = "Apple: In-House Vs K-Street Lobbying", y = "Average Amount", x = "Year")
+
+appl_e_p + scale_fill_discrete(name = "Mechanism", labels = c("K-Street Lobbying Firm", "In-House"))
+```
+Apple's uses a mix of K-Street lobbying firms and their own in-house lobbying team. From the figure, Apple consistently spends more money through it's own lobbying entities as opposed to hiring an external party. 
+
+#### Microsoft 
+```{r}
+microsoft <- is_c_r %>% 
+  filter(client_name == "Microsoft Corporation" & amount > 0 )
+
+mic <- microsoft %>% subset(select = c("report_year", "registrant_name", "client_name", "amount", "is_client_self_filer"))
+
+mic_e <- mic %>% group_by(report_year, registrant_name) %>% summarise(avg = mean(amount))
+
+mic_e$mic2 <- mic_e$registrant_name == "Microsoft Corporation"
+  
+mic_p <- ggplot(mic_e, aes(x = report_year, y = avg, fill = mic2 )) + theme_classic() + scale_color_brewer(cbPalette) + 
+  geom_bar(position = "dodge", stat = "identity")  + 
+  scale_y_continuous(labels = scales::dollar_format(unit = "M", prefix = "$", suffix = " M", scale = 1e-6)) +   
+  labs(title = "Microsoft: In-House vs K-Street Lobbying", x = "Year", y = "Average Amount Lobbied")
+
+mic_p + scale_fill_discrete(name = "Mechanism", labels = c("K-Street Lobbying Firm", "In-House"))
+```
+Interestingly, Microsoft does not have their own in-house lobbying team. All of their lobbying efforts are conducted through other lobbying entities. 
+
+### Overall Findings 
+
+Overall, corporate lobbying in the United States covers a large set of interest groups lobbying for various issues at different amounts. 
+
+I found that lobbying expenditure increased over time between 1999 - 2010, but has remained at relatively steady levels since 2010. An increase in expenditure is also linked with an increase in the number of reports filed each year. Lobbying firms on K-Street can represent companies for the majority of their lobbying efforts, as evidenced by the example of Microsoft. In twenty years, these lobbying representing companies have amassed large client lists beyond 5000. However, some companies primarily perform in-house lobbying as evidenced by the example of Apple. 
+
+I also found it interesting that companies spend a significant amount of money lobbying for issues outside their core business operations. For example, Apple lobbied for Healthcare in 2007, and Microsoft consistently spent money to lobby for Immigration. Although the purpose behind their initiatives can only be speculative, it makes it clear that politics stems into other areas of a company's endeavors beyond traditional means like taxes or the federal budget. 
+
+### Ethical Considerations 
+
+Overall, I found the dataset to be highly credible and relatively free from ethical issues in its initial coding. LobbyView is a team run by the Massachusetts Institute of Technology. They are taking data that is already available to the public and coding those reports into a more intuitive format for researchers. One area that could warrant potential concern is the lack of empirical scholarship on the use of this dataset. There is only one published empirical paper by Professor In Song Kim (see working paper), who's affiliated with LobbyView as a principal investigator. Professor Kim is also working on a current paper on Firm-Level Lobbying using the Report level data from where my analysis stems. A lack of scholarship could be reflective of the topic. There are relatively few open sources tracking corporate lobbying in the United States, which makes it more difficult to perform in-depth quantitative analysis beyond visualizations. I think further modifications to sources like LobbbyView could provide empirical considerations to the topic in future years. 
+
+The ethical issue I'll discuss is whether the data could be manipulated into a format that conveys wrong information or unsubstantiated claims. I think this is where I could have overestimated my analysis by focusing heavily on expenditure. I created visualizations under the assumption that companies use the money to buy influence in U.S. politics. This suggests that more money lobbied toward a political issue might garner more success for that particular company. However, connecting expenditure to direct influence isn't so simple. First, individuals behind companies engage in other forms of lobbying via personal connections or donations to political campaigns. These other forms of lobbying are not regulated and therefore not covered by the dataset. Second, companies enter politics with different levels of influence so just putting money behind particular issues does not gurantee a set of equal returns. Therefore, I conducted my visualizations intending to explain what companies were doing, not the motivations behind their actions. 
+
+Therefore, I think the primary area where researchers like myself could overanalyze the information is by making causal claims. For example, arguing that because company x filed y amount of reports on z issues, it corresponded to a particular piece of legislation. In other words, deriving theories about firm behavior would not be possible unless there was a clear method of analysis provided by the researcher. Otherwise, this dataset is more suited to provide supplemental information to an existing theory or make observations. For example, Apple has spent 5 million dollars on Consumer-Related Issues over the twenty years. 
+
+
+
+### Citations 
+LobbyView Data - 
+@unpublished{kim:18,
+  Author = {In Song Kim},
+  title = {LobbyView: Firm-level Lobbying \& Congressional Bills Database},
+  year = {2018},
+  note = {Working Paper available from \url{http://web.mit.edu/insong/www/pdf/lobbyview.pdf}}}
+  
+Working Paper- 
+@article{kim:17,
+	Author = {In Song Kim},
+	Journal = {American Political Science Review},
+        Volume = {111},
+        Number = {1},
+        Pages = {1--20},
+	Title = {Political Cleavages within Industry: Firm level
+                  lobbying for Trade Liberalization},
+	Year = {2016}}
+
+Working Paper - “LobbyView: Firm-Level Lobbying &amp; Congressional Bills Database.” Accessed December 13, 2022. https://web.mit.edu/insong/www/pdf/lobbyview.pdf. 
+  
+Lobbying Information 
+- Lobbying Issue Codes - https://lda.congress.gov/ld/help/default.htm?turl=Documents%2FAppCodes.htm
+- Lobbying Disclosure Act - https://lobbyingdisclosure.house.gov/
+  
+Helpful R Links 
+- https://rkabacoff.github.io/datavis/Bivariate.html#grouped-kernel-density-plots
+- https://socviz.co/lookatdata.html
+
+  
+  
+
+
+
